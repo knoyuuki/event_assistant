@@ -4,9 +4,9 @@
 
 - **后端**：Python FastAPI（端口 10023）
 - **前端**：Vue 3 + Vite（端口 5173，开发时 API 代理到后端）
-- **数据库**：MySQL（127.0.0.1:3306，库名 `face_support`）
+- **数据库**：MySQL，库名 `event_assistant`（连接配置见下文「配置与密钥」）
 
-> ⚠️ `photos/`（人员照片）与 `people/`（通讯录、会议资料等内部资料）包含个人信息，已被 `.gitignore` 排除，不入版本库。
+> ⚠️ `photos/`（人员照片）、`people/`（通讯录、会议资料等内部资料）、`config/secret.key`（解密密钥）与本地 `config/*.json` 均已被 `.gitignore` 排除，不入版本库。
 
 ---
 
@@ -58,13 +58,24 @@ face-support/
 ### 前置条件
 - Python 3.10+
 - Node.js 18+
-- MySQL 5.7+，运行在 `127.0.0.1:3306`，账号 `root` / 密码 `root`（数据库与表会在启动时自动创建）
+- MySQL 5.7+（数据库与表会在启动时自动创建）
 
 ### 安装依赖
 ```bash
 pip install -r backend/requirements.txt
 cd frontend && npm install
 ```
+
+### 配置数据库（首次）
+数据库连接信息通过配置文件管理（密码加密存储，密钥不入库）：
+
+```bash
+# 生成密钥并写入加密后的配置（把 '你的密码' 换成 MySQL 密码）
+cd backend
+python encrypt_password.py --password '你的密码'
+```
+
+首次运行会自动生成 `config/secret.key` 密钥文件，并把加密后的密码写入 `config/dev.json`。配置文件与密钥文件均不入版本库。
 
 ### 启动
 - **Windows**：双击 `start.bat`
@@ -82,6 +93,43 @@ npm run dev
 ```
 
 浏览器访问 **http://localhost:5173**。
+
+---
+
+## 🔐 配置与密钥
+
+### 配置文件
+- 配置目录为项目根 `config/`，格式为 JSON
+- **仓库仅提交模板** `config/example.json`；实际的 `config/dev.json`、`config/prod.json` 及密钥文件 `config/secret.key` 均被 `.gitignore` 忽略
+
+### 指定活跃配置
+通过环境变量选择加载哪个配置文件（默认 `dev`）：
+
+| 环境变量 | 作用 | 示例 |
+|----------|------|------|
+| `APP_ENV` | 加载 `config/{APP_ENV}.json` | `APP_ENV=prod python backend/main.py` |
+| `APP_CONFIG` | 直接指定配置文件路径（优先级更高） | `APP_CONFIG=/path/to/custom.json python backend/main.py` |
+
+### 密码加密
+- 数据库密码不以明文存储在配置文件中，而是经 **Fernet 对称加密** 后的密文（`password_encrypted` 字段）
+- 解密密钥来源：环境变量 `APP_ENC_KEY` > 本地文件 `config/secret.key`；均不存在时首次运行自动生成密钥文件
+- 密钥文件一旦丢失，已加密的配置将无法解密——请妥善备份
+- 生成/更新加密配置：`python backend/encrypt_password.py --password '你的密码'`（可选 `--config prod` 指定环境）
+
+```json
+// config/dev.json（本地生成，含密文）
+{
+  "server": { "host": "0.0.0.0", "port": 10023 },
+  "database": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "root",
+    "password_encrypted": "gAAAAABq...（Fernet 密文）",
+    "database": "event_assistant",
+    "charset": "utf8mb4"
+  }
+}
+```
 
 ---
 
@@ -103,7 +151,7 @@ npm run dev
 
 ## 🗄️ 数据库
 
-库名 `face_support`，主要表：
+库名 `event_assistant`（启动时自动建库建表，连接信息来自 `config/` 下活跃配置，密码加密存储），主要表：
 
 | 表 | 说明 |
 |----|------|
