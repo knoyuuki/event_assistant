@@ -24,3 +24,7 @@ Thumbs.db
 *.log
 .idea/
 .vscode/
+
+# ── 本地配置与密钥（不入库）──────────────────────
+config/*
+!config/example.json

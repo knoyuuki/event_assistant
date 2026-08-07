@@ -4,13 +4,20 @@ import pymysql
 import pymysql.err
 from pymysql.cursors import DictCursor
 
+from config_loader import load_config
+from security import decrypt
+
+# ─── Database config from active config file ───────────────────
+# Loaded via config_loader (APP_ENV / APP_CONFIG); password is stored
+# encrypted in the config file and decrypted here at startup.
+_CONFIG = load_config()
 DB_CONFIG = {
-    "host": "127.0.0.1",
-    "port": 3306,
-    "user": "root",
-    "password": "root",
-    "database": "face_support",
-    "charset": "utf8mb4",
+    "host": _CONFIG["database"].get("host", "127.0.0.1"),
+    "port": _CONFIG["database"].get("port", 3306),
+    "user": _CONFIG["database"].get("user", "root"),
+    "password": decrypt(_CONFIG["database"].get("password_encrypted", "")),
+    "database": _CONFIG["database"].get("database", "event_assistant"),
+    "charset": _CONFIG["database"].get("charset", "utf8mb4"),
 }
 
 # ─── Department category tree (predefined) ──────────────────────────

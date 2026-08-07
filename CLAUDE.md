@@ -9,9 +9,15 @@ face-support/
 ├── CLAUDE.md              # 本文档
 ├── start.bat              # Windows 启动脚本
 ├── start.sh               # Linux/Mac 启动脚本
+├── config/                # JSON 配置文件（仅 example.json 入库）
+│   ├── example.json       # 配置模板
+│   └── dev.json           # 本地实际配置（gitignored，含加密密码）
 ├── backend/               # Python FastAPI 后端
 │   ├── main.py            # 入口，API 路由，CORS，启动事件
-│   ├── database.py        # MySQL 连接，建库建表
+│   ├── database.py        # MySQL 连接，建库建表（配置来自 config/）
+│   ├── config_loader.py   # 活跃配置加载（APP_ENV / APP_CONFIG）
+│   ├── security.py        # Fernet 密钥加载 + 加解密
+│   ├── encrypt_password.py# CLI：生成密钥、加密密码、写配置
 │   ├── models.py          # Pydantic 数据模型
 │   ├── scanner.py         # 照片目录扫描，文件名解析，数据同步
 │   └── requirements.txt   # Python 依赖
@@ -40,10 +46,12 @@ face-support/
 ## 数据库
 
 ### 连接信息
-- **地址**: 127.0.0.1:3306
-- **用户**: root
-- **密码**: root
-- **数据库**: face_support
+- **数据库**: event_assistant（启动时自动建库建表）
+- 连接参数不再硬编码，读取 `config/` 下活跃配置文件（`backend/config_loader.py`）
+- 指定活跃配置：环境变量 `APP_ENV`（如 `dev`/`prod`，加载 `config/{APP_ENV}.json`）或 `APP_CONFIG`（直接指定路径），默认 `dev`
+- **密码加密存储**：配置文件中的 `password_encrypted` 为 Fernet 密文（`backend/security.py`），解密密钥来自环境变量 `APP_ENC_KEY` 或本地文件 `config/secret.key`
+- 生成配置：`python backend/encrypt_password.py --password '你的密码'`（`backend/encrypt_password.py`）
+- ⚠️ `config/*.json`（除 `example.json`）与 `config/secret.key` 不入库
 
 ### 表结构
 
@@ -108,17 +116,25 @@ face-support/
 ### 前置条件
 - Python 3.10+（需安装依赖：`pip install -r backend/requirements.txt`）
 - Node.js 18+（需安装依赖：`cd frontend && npm install`）
-- MySQL 5.7+ 运行在 127.0.0.1:3306，root/root
+- MySQL 5.7+ 运行在 127.0.0.1:3306
+
+### 首次配置数据库
+```bash
+cd backend
+python encrypt_password.py --password '你的数据库密码'
+```
+自动生成 `config/secret.key` 密钥文件与 `config/dev.json`（含加密密码、库名 `event_assistant`）。
 
 ### 启动步骤
 1. 安装后端依赖：`pip install -r backend/requirements.txt`
 2. 安装前端依赖：`cd frontend && npm install`
-3. 双击 `start.bat`（Windows）或运行 `bash start.sh`（Linux/Mac）
-4. 浏览器访问 `http://localhost:5173`
+3. 生成数据库配置：`cd backend && python encrypt_password.py --password '你的密码'`
+4. 双击 `start.bat`（Windows）或运行 `bash start.sh`（Linux/Mac）
+5. 浏览器访问 `http://localhost:5173`
 
 ### 手动启动
 ```bash
-# 终端1 - 后端 (端口 10023)
+# 终端1 - 后端 (端口 10023，默认加载 config/dev.json；可用 APP_ENV=prod 切换)
 cd backend
 python main.py
 

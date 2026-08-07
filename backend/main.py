@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from database import init_database, get_connection, normalize_dept_name, DEPT_CATEGORY_TREE
+from config_loader import load_config
 from models import (
     TestCheckRequest, TestResultSave,
     PersonCreate, PersonUpdate,
@@ -1425,4 +1426,9 @@ def resort_meeting(meeting_id: int, req: MeetingResort | None = None):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=10023)
+    _cfg = load_config()
+    _host = _cfg.get("server", {}).get("host", "0.0.0.0")
+    _port = _cfg.get("server", {}).get("port", 10023)
+    print(f"[Startup] Active config: {_cfg.get('app', {}).get('name', '会务助手')} "
+          f"| server http://{_host}:{_port} | database={_cfg.get('database', {}).get('database')}")
+    uvicorn.run(app, host=_host, port=_port)

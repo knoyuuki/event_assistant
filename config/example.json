@@ -1,0 +1,18 @@
+{
+  "app": {
+    "name": "会务助手",
+    "debug": true
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 10023
+  },
+  "database": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "root",
+    "password_encrypted": "<运行 python backend/encrypt_password.py --password '你的密码' 生成后填入>",
+    "database": "event_assistant",
+    "charset": "utf8mb4"
+  }
+}
