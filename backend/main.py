@@ -19,7 +19,7 @@ from config_loader import load_config
 from api_keys import (
     init_api_tables, create_app, list_apps, get_app_by_id, update_app,
     rotate_secret, delete_app, log_call, get_logs, cleanup_expired_logs,
-    LOG_RETENTION_DAYS, LOG_MAX_TEXT,
+    get_app_by_app_id, LOG_RETENTION_DAYS, LOG_MAX_TEXT,
 )
 from api_auth import verify_ext_signature
 from auth import (
@@ -1521,6 +1521,107 @@ async def ext_persons(request: Request, app_id: str = Depends(verify_ext_signatu
         conn.close()
 
 
+# ── 智能体专用：部门排序存档查询（供"部门排序选择"）──
+@ext_router.get("/dept-snapshots")
+async def ext_dept_snapshots(request: Request, app_id: str = Depends(verify_ext_signature)):
+    """查询可用部门排序存档列表（选择 sort_snapshot_id 用）。"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, note, created_at FROM dept_sort_snapshots ORDER BY id DESC"
+            )
+            rows = cur.fetchall()
+            for r in rows:
+                r["created_at"] = r["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+            return {"code": 0, "message": "ok", "data": {"app_id": app_id, "items": rows}}
+    finally:
+        conn.close()
+
+
+# ── 智能体专用：部门名列表（构造部门名单用）──────────
+@ext_router.get("/departments")
+async def ext_departments(request: Request, app_id: str = Depends(verify_ext_signature)):
+    """查询全部部门名（树序）。"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT p.department
+                FROM persons p
+                LEFT JOIN departments d ON p.department = d.name
+                LEFT JOIN dept_categories c ON d.category_id = c.id
+                GROUP BY p.department
+                ORDER BY MIN(COALESCE(c.sort_order, 999)), MIN(COALESCE(d.sort_order, 999)), p.department
+            """)
+            names = [row["department"] for row in cur.fetchall()]
+            return {"code": 0, "message": "ok", "data": {"app_id": app_id, "items": names}}
+    finally:
+        conn.close()
+
+
+# ── 智能体专用：名单排序（人员名单 + 部门名单 + 排序选择）──
+class ExtMeetingSortRequest(BaseModel):
+    name: str | None = None                       # 会议名称（可选）
+    input_persons: str | None = None              # 人员名单：姓名，支持换行/逗号/顿号分隔
+    input_departments: str | None = None          # 部门名单：部门名，支持换行/逗号/顿号分隔
+    sort_snapshot_id: int | None = None           # 部门排序存档ID（部门排序选择，来自 /dept-snapshots）
+
+
+@ext_router.post("/meetings/sort")
+async def ext_meeting_sort(request: Request, req: ExtMeetingSortRequest,
+                           app_id: str = Depends(verify_ext_signature)):
+    """智能体接口：输入人员名单/部门名单与排序选择，返回排序后名单。
+
+    排序规则: 职位等级 → 部门树顺序（或所选存档） → 组内顺序。
+    """
+    conn = get_connection()
+    try:
+        dept_names = _parse_names(req.input_departments)
+        person_names = _parse_names(req.input_persons)
+        if not dept_names and not person_names:
+            raise HTTPException(status_code=400, detail="input_departments 与 input_persons 不能同时为空")
+
+        snapshot_rank = _load_snapshot_rank(conn, req.sort_snapshot_id)
+        sorted_persons = _sort_persons(conn, person_names, snapshot_rank)
+        if dept_names:
+            sorted_depts = _sort_departments(conn, dept_names, snapshot_rank)
+        else:
+            sorted_depts = _derive_departments_from_persons(conn, sorted_persons, snapshot_rank)
+
+        # 落库存档（与内部 /api/meetings 一致），便于追溯
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO meetings
+                   (name, input_persons, input_departments, sorted_persons, sorted_departments, sort_snapshot_id)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (req.name or "外部调用", req.input_persons or "", req.input_departments or "",
+                 json.dumps(sorted_persons, ensure_ascii=False),
+                 json.dumps(sorted_depts, ensure_ascii=False), req.sort_snapshot_id),
+            )
+            new_id = cur.lastrowid
+        conn.commit()
+
+        return {
+            "code": 0,
+            "message": "ok",
+            "data": {
+                "app_id": app_id,
+                "meeting_id": new_id,
+                "sort_snapshot_id": req.sort_snapshot_id,
+                "sorted_departments": sorted_depts,
+                "sorted_persons": sorted_persons,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        conn.close()
+
+
 # ── 密钥管理（管理员）─────────────────────────────
 @admin_router.post("/app-keys", dependencies=[Depends(require_admin_or_token)])
 def api_create_app(req: AppCreateRequest):
@@ -1767,6 +1868,24 @@ def api_delete_user(user_id: int):
 
 app.include_router(admin_router)
 app.include_router(auth_router)
+
+
+# ── 中间件 0：外部接口请求体解密（AES-GCM）────────────
+# 必须在路由前完成：FastAPI 在依赖运行前就解析请求体，
+# 因此 X-Encrypt=1 的解密放在中间件层，并把原始密文暂存供签名校验。
+@app.middleware("http")
+async def ext_body_decrypt(request: Request, call_next):
+    if request.url.path.startswith("/api/ea/") and request.headers.get("X-Encrypt") == "1":
+        raw = await request.body()
+        request.state.raw_body = raw
+        try:
+            app = get_app_by_app_id(request.headers.get("X-App-Id", ""))
+            if app:
+                from security import decrypt_body
+                request._body = await asyncio.to_thread(decrypt_body, raw.decode(), app["secret_plain"])
+        except Exception:
+            request._body = raw  # 解密失败：保持原文，由签名依赖统一报 401
+    return await call_next(request)
 
 
 # ── 中间件 1：内部接口访问控制 ───────────────────────
