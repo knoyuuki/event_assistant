@@ -4,7 +4,7 @@
 
 - **后端**：Python FastAPI（端口 10023）
 - **前端**：Vue 3 + Vite（端口 5173，开发时 API 代理到后端）
-- **数据库**：MySQL，库名 `event_assistant`（连接配置见下文「配置与密钥」）
+- **数据库**：MySQL 8.0，库名 `event_assistant`（连接配置见下文「配置与密钥」）
 
 > ⚠️ `photos/`（人员照片）、`people/`（通讯录、会议资料等内部资料）、`config/secret.key`（解密密钥）与本地 `config/*.json` 均已被 `.gitignore` 排除，不入版本库。
 
@@ -58,7 +58,7 @@ face-support/
 ### 前置条件
 - Python 3.10+
 - Node.js 18+
-- MySQL 5.7+（数据库与表会在启动时自动创建）
+- MySQL 8.0+（数据库与表会在启动时自动创建）
 
 ### 安装依赖
 ```bash
@@ -152,6 +152,14 @@ npm run dev
 ## 🗄️ 数据库
 
 库名 `event_assistant`（启动时自动建库建表，连接信息来自 `config/` 下活跃配置，密码加密存储），主要表：
+
+> **MySQL 8 兼容性约定（重要）**
+> 项目以 **MySQL 8.0+** 为基准开发与运行（默认启用 `ONLY_FULL_GROUP_BY`）：
+> - `SELECT DISTINCT` 时，`ORDER BY` 的表达式必须出现在 SELECT 列表中，否则报错 3065
+>   （如 `/api/departments/names`：应改用 `GROUP BY` + `MIN()` 聚合排序）
+> - `GROUP BY` 查询中，非聚合列必须出现在 GROUP BY 子句中
+> - 建表统一使用 `ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`，时间列默认值用 `CURRENT_TIMESTAMP`
+> - 所有 SQL 一律使用参数化查询（`%s` 占位符），禁止拼接字符串
 
 | 表 | 说明 |
 |----|------|

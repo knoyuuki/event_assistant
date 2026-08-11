@@ -116,7 +116,7 @@ face-support/
 ### 前置条件
 - Python 3.10+（需安装依赖：`pip install -r backend/requirements.txt`）
 - Node.js 18+（需安装依赖：`cd frontend && npm install`）
-- MySQL 5.7+ 运行在 127.0.0.1:3306
+- MySQL 8.0+ 运行在 127.0.0.1:3306
 
 ### 首次配置数据库
 ```bash
