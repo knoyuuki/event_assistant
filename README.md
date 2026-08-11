@@ -45,7 +45,14 @@ face-support/
 │   ├── models.py         # Pydantic 数据模型、职位等级映射
 │   ├── importer.py       # Excel 通讯录 / Markdown 领导层级导入、照片匹配
 │   ├── scanner.py        # 照片目录扫描、文件名解析、数据同步
+│   ├── api_keys.py       # 外部应用密钥管理（CRUD、调用日志、7天清理）
+│   ├── api_auth.py       # 外部接口 HMAC-SHA256 签名验证
 │   └── requirements.txt  # Python 依赖
+├── sql/                   # 数据库脚本
+│   ├── init.sql          # 当前完整表结构（全新部署基线）
+│   └── migrations/       # 表结构增量变更（递增编号）
+├── docs/api-signature.md # 外部接口签名加密规范
+├── examples/             # 签名调用客户端示例（Python/Shell）
 └── frontend/             # Vue 3 + Vite 前端
     ├── index.html
     ├── package.json
