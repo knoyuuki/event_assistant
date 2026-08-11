@@ -4,15 +4,24 @@ import json
 import os
 import random
 import re
+import asyncio
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request, Depends, Header, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
 from database import init_database, get_connection, normalize_dept_name, DEPT_CATEGORY_TREE
 from config_loader import load_config
+from api_keys import (
+    init_api_tables, create_app, list_apps, get_app_by_id, update_app,
+    rotate_secret, delete_app, log_call, get_logs, cleanup_expired_logs,
+    LOG_RETENTION_DAYS, LOG_MAX_TEXT,
+)
+from api_auth import verify_ext_signature
 from models import (
     TestCheckRequest, TestResultSave,
     PersonCreate, PersonUpdate,
@@ -32,8 +41,26 @@ PHOTOS_DIR = str(Path(__file__).resolve().parent.parent / "photos")
 async def lifespan(app: FastAPI):
     """Initialize database on startup."""
     init_database()
+    init_api_tables()
     print(f"[Startup] Database initialized.")
+
+    # 定时清理任务：调用日志仅保留 7 天，每小时自动清理一次
+    cleanup_task = asyncio.create_task(_log_cleanup_loop())
+    print(f"[Startup] API 调用日志清理任务已启动（保留 {LOG_RETENTION_DAYS} 天，每小时检查）")
     yield
+    cleanup_task.cancel()
+
+
+async def _log_cleanup_loop():
+    """定时清理超期调用日志（默认每小时）。"""
+    while True:
+        try:
+            deleted = await asyncio.to_thread(cleanup_expired_logs, LOG_RETENTION_DAYS)
+            if deleted:
+                print(f"[Cleanup] 已清理 {deleted} 条超过 {LOG_RETENTION_DAYS} 天的调用日志")
+        except Exception as e:
+            print(f"[Cleanup] 清理调用日志失败: {e}")
+        await asyncio.sleep(3600)
 
 
 app = FastAPI(title="Face Recognition Assistant", lifespan=lifespan)
@@ -1421,6 +1448,205 @@ def resort_meeting(meeting_id: int, req: MeetingResort | None = None):
         raise HTTPException(status_code=400, detail=str(e))
     finally:
         conn.close()
+
+
+# ─── 外部接口：签名验证 + 调用日志 ──────────────────
+
+# 管理令牌：来自配置 app.admin_token 或环境变量 ADMIN_TOKEN；未配置时管理接口禁用
+_admin_token = (
+    os.environ.get("ADMIN_TOKEN")
+    or load_config().get("app", {}).get("admin_token", "")
+)
+
+
+def _check_admin(authorization: str = Header(default="", alias="X-Admin-Token")) -> None:
+    """管理接口鉴权。"""
+    if not _admin_token:
+        raise HTTPException(status_code=503, detail="管理令牌未配置（请设置 app.admin_token 或 ADMIN_TOKEN）")
+    if authorization != _admin_token:
+        raise HTTPException(status_code=401, detail="管理令牌无效")
+
+
+ext_router = APIRouter(prefix="/ext", tags=["外部接口"])
+admin_router = APIRouter(prefix="/api", tags=["密钥管理"])
+
+
+class AppCreateRequest(BaseModel):
+    app_name: str
+    description: str | None = None
+    expires_at: str | None = None  # ISO 格式，可选
+
+
+class AppUpdateRequest(BaseModel):
+    app_name: str | None = None
+    status: int | None = None  # 1=启用 0=禁用
+    description: str | None = None
+
+
+# ── 外部示例接口（受签名保护）────────────────────
+@ext_router.post("/echo")
+async def ext_echo(request: Request, app_id: str = Depends(verify_ext_signature)):
+    """签名保护示例：回显请求体。"""
+    body = await request.json()
+    return {"code": 0, "message": "ok", "data": {"app_id": app_id, "echo": body}}
+
+
+@ext_router.get("/persons")
+async def ext_persons(request: Request, app_id: str = Depends(verify_ext_signature),
+                      limit: int = Query(5, ge=1, le=50)):
+    """签名保护示例：查询人员列表（数据子集）。"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, department, position, filename FROM persons ORDER BY id LIMIT %s",
+                (int(limit),),
+            )
+            items = cur.fetchall()
+            for r in items:
+                r["photo_url"] = f"/api/photo/{r['filename']}"
+            return {"code": 0, "message": "ok", "data": {"app_id": app_id, "items": items}}
+    finally:
+        conn.close()
+
+
+# ── 密钥管理（管理员）─────────────────────────────
+@admin_router.post("/app-keys", dependencies=[Depends(_check_admin)])
+def api_create_app(req: AppCreateRequest):
+    """创建外部应用，返回 app_id + app_secret（仅此一次展示，请妥善保存）。"""
+    if not req.app_name.strip():
+        raise HTTPException(status_code=400, detail="app_name 不能为空")
+    return create_app(req.app_name.strip(), req.description, req.expires_at)
+
+
+@admin_router.get("/app-keys", dependencies=[Depends(_check_admin)])
+def api_list_apps():
+    """列出全部外部应用。"""
+    return {"code": 0, "data": list_apps()}
+
+
+@admin_router.get("/app-keys/{app_id}", dependencies=[Depends(_check_admin)])
+def api_get_app(app_id: int):
+    """查询单个外部应用。"""
+    app = get_app_by_id(app_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    app.pop("secret_encrypted", None); app.pop("secret_plain", None)
+    return {"code": 0, "data": app}
+
+
+@admin_router.put("/app-keys/{app_id}", dependencies=[Depends(_check_admin)])
+def api_update_app(app_id: int, req: AppUpdateRequest):
+    """更新应用（名称/状态/备注）。"""
+    if not update_app(app_id, req.app_name, req.status, req.description):
+        raise HTTPException(status_code=404, detail="应用不存在或无更新内容")
+    return {"code": 0, "message": "更新成功"}
+
+
+@admin_router.post("/app-keys/{app_id}/rotate", dependencies=[Depends(_check_admin)])
+def api_rotate_app(app_id: int):
+    """轮换密钥：旧密钥立即失效，返回新密钥（仅此一次展示）。"""
+    secret = rotate_secret(app_id)
+    if not secret:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    return {"code": 0, "message": "密钥已轮换，旧密钥已失效", "app_secret": secret}
+
+
+@admin_router.delete("/app-keys/{app_id}", dependencies=[Depends(_check_admin)])
+def api_delete_app(app_id: int):
+    """删除应用及其全部调用日志。"""
+    if not delete_app(app_id):
+        raise HTTPException(status_code=404, detail="应用不存在")
+    return {"code": 0, "message": "已删除"}
+
+
+@admin_router.get("/app-keys/{app_id}/logs", dependencies=[Depends(_check_admin)])
+def api_app_logs(app_id: int, days: int = Query(LOG_RETENTION_DAYS, ge=1, le=30),
+                 limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+    """查询某应用最近 N 天（默认 7 天）的调用日志。"""
+    result = get_logs(app_id, days=days, limit=limit, offset=offset)
+    if result is None:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    return {"code": 0, "data": result}
+
+
+@admin_router.post("/admin/logs/cleanup", dependencies=[Depends(_check_admin)])
+def api_cleanup_logs(days: int = Query(LOG_RETENTION_DAYS, ge=1, le=30)):
+    """手动触发清理：删除超过保留期的调用日志。"""
+    deleted = cleanup_expired_logs(days)
+    return {"code": 0, "message": f"已清理 {deleted} 条超过 {days} 天的调用日志"}
+
+
+app.include_router(ext_router)
+app.include_router(admin_router)
+
+
+def _caller_ip(request: Request) -> str:
+    """取真实调用方 IP：优先 X-Forwarded-For（nginx 已设置），其次直连地址。"""
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()[:45]
+    return request.client.host if (request.client and request.client.host) else "-"
+
+
+# ── 外部接口调用日志中间件 ──────────────────────────
+@app.middleware("http")
+async def ext_call_logging(request: Request, call_next):
+    """记录外部接口调用：IP / 路径 / 状态码 / 请求参数 / 返回结果。
+    仅记录携带 X-App-Id 的请求（含签名失败的请求），不影响内部接口。
+    """
+    app_id_header = request.headers.get("X-App-Id")
+    is_ext = request.url.path.startswith("/ext/")
+    if not app_id_header and not is_ext:
+        return await call_next(request)
+
+    start = time.perf_counter()
+    try:
+        body_bytes = await request.body()
+    except Exception:
+        body_bytes = b""
+    request_params = {
+        "query": dict(request.query_params),
+        "body": body_bytes.decode("utf-8", errors="replace")[:LOG_MAX_TEXT],
+    }
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        # 未捕获异常：记录 500 后继续抛出
+        log_call(app_id_header or "-", _caller_ip(request),
+                 request.method, request.url.path, 500, request_params, {"error": "internal_error"},
+                 int((time.perf_counter() - start) * 1000))
+        raise
+
+    # 读取响应体（JSON 场景直接可用）
+    resp_body = b""
+    try:
+        if hasattr(response, "body"):
+            resp_body = response.body
+        else:
+            resp_body = b"".join([chunk async for chunk in response.body_iterator])
+            response = JSONResponse(
+                content=json.loads(resp_body.decode("utf-8", errors="replace") or "null")
+                if resp_body else {},
+                status_code=response.status_code,
+                headers=dict(response.headers),
+            )
+    except Exception:
+        pass
+
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    log_call(
+        app_id_header or "-",
+        _caller_ip(request),
+        request.method,
+        request.url.path,
+        response.status_code,
+        request_params,
+        resp_body.decode("utf-8", errors="replace")[:LOG_MAX_TEXT],
+        duration_ms,
+    )
+    return response
 
 
 # ─── Main ────────────────────────────────────────────────────
