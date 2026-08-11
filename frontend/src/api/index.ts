@@ -422,3 +422,55 @@ api.interceptors.response.use(
     return Promise.reject(error)
   },
 )
+
+// ─── 外部应用密钥管理（仅 admin）─────────────────────
+
+export interface AppKeyItem {
+  id: number
+  app_id: string
+  app_name: string
+  status: number
+  description?: string | null
+  expires_at?: string | null
+  last_called_at?: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export interface AppKeyLog {
+  id: number
+  caller_ip: string
+  method: string
+  path: string
+  status_code: number
+  request_params?: string
+  response_result?: string
+  duration_ms?: number | null
+  created_at: string
+}
+
+export function fetchAppKeys() {
+  return api.get<{ code: number; data: AppKeyItem[] }>('/app-keys')
+}
+
+export function createAppKey(data: { app_name: string; description?: string; expires_at?: string }) {
+  return api.post<{ code: number; app_id: string; app_secret: string }>('/app-keys', data)
+}
+
+export function updateAppKey(id: number, data: { status?: number; app_name?: string; description?: string }) {
+  return api.put(`/app-keys/${id}`, data)
+}
+
+export function rotateAppKey(id: number) {
+  return api.post<{ code: number; app_secret: string }>(`/app-keys/${id}/rotate`)
+}
+
+export function deleteAppKey(id: number) {
+  return api.delete(`/app-keys/${id}`)
+}
+
+export function fetchAppKeyLogs(id: number, days = 7, limit = 50) {
+  return api.get<{ code: number; data: { total: number; logs: AppKeyLog[] } }>(
+    `/app-keys/${id}/logs?days=${days}&limit=${limit}`,
+  )
+}
