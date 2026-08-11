@@ -20,6 +20,13 @@
 | 部门管理 | `/departments` | 部门分类树的维护、排序、**排序存档**（保存/恢复当前部门树顺序，供会议排序引用） |
 | 会议排序 | `/meetings` | 输入参会部门/人员名单，按职位等级 → 部门树顺序 → 组内顺序自动排序，生成排位名单 |
 
+### 外部接口（签名保护）
+- 对外提供 `/ext/*` 接口（示例：`GET /ext/persons`、`POST /ext/echo`），调用需 **HMAC-SHA256 签名**（可选用 AES-256-GCM 加密请求体）
+- 签名规范见 [docs/api-signature.md](docs/api-signature.md)，客户端示例见 [examples/](examples/)
+- 密钥管理接口：`POST /api/app-keys` 创建（返回 `app_id` + `app_secret`），`PUT/DELETE /api/app-keys/{id}` 修改/删除，`POST /api/app-keys/{id}/rotate` 轮换密钥，`GET /api/app-keys/{id}/logs` 查调用日志（最近 7 天）
+- 管理接口需请求头 `X-Admin-Token`（配置 `app.admin_token` 或环境变量 `ADMIN_TOKEN`）
+- 每次携带 `X-App-Id` 的调用自动记录日志（调用方 IP、路径、状态码、请求参数、返回结果），保留 7 天，后端每小时自动清理超期数据
+
 ### 认人测试评分
 `score = round((correct_count / total_count) * 100, 2)`，全部答对 = 100 分。
 
