@@ -349,3 +349,76 @@ export function deleteDeptSnapshot(id: number) {
 export function applyDeptSnapshot(id: number) {
   return api.post(`/dept-snapshots/${id}/apply`)
 }
+
+// ─── 登录鉴权 ─────────────────────────────────────────────
+
+export interface UserInfo {
+  id: number
+  username: string
+  role: 'admin' | 'user'
+  display_name?: string | null
+}
+
+export interface LoginResult {
+  token: string
+  user: UserInfo
+}
+
+const TOKEN_KEY = 'ea_token'
+const USER_KEY = 'ea_user'
+
+export function getToken(): string {
+  return localStorage.getItem(TOKEN_KEY) || ''
+}
+export function setToken(token: string) {
+  localStorage.setItem(TOKEN_KEY, token)
+}
+export function clearToken() {
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
+}
+export function getStoredUser(): UserInfo | null {
+  try {
+    return JSON.parse(localStorage.getItem(USER_KEY) || 'null')
+  } catch {
+    return null
+  }
+}
+export function setStoredUser(user: UserInfo) {
+  localStorage.setItem(USER_KEY, JSON.stringify(user))
+}
+
+export function login(username: string, password: string) {
+  return api.post<{ code: number; data: LoginResult }>('/auth/login', { username, password })
+}
+export function logout() {
+  return api.post('/auth/logout')
+}
+export function fetchMe() {
+  return api.get<{ code: number; data: UserInfo }>('/auth/me')
+}
+export function changePassword(oldPassword: string, newPassword: string) {
+  return api.post('/auth/change-password', { old_password: oldPassword, new_password: newPassword })
+}
+
+// ─── 拦截器：携带 token；401 统一跳登录 ───────────────────
+api.interceptors.request.use((config) => {
+  const token = getToken()
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+api.interceptors.response.use(
+  (resp) => resp,
+  (error) => {
+    const status = error.response?.status
+    const url: string = error.config?.url || ''
+    if (status === 401 && !url.startsWith('/auth/login')) {
+      clearToken()
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+    }
+    return Promise.reject(error)
+  },
+)

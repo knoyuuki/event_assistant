@@ -9,7 +9,7 @@
 #
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://127.0.0.1}"
+BASE_URL="${BASE_URL:-http://127.0.0.1:10025}"
 : "${APP_ID:?请设置 APP_ID}"
 : "${APP_SECRET:?请设置 APP_SECRET}"
 
@@ -26,18 +26,18 @@ echo
 
 # ── 1. GET 签名请求 ───────────────────────────────
 TS=$(date +%s); NONCE=$(openssl rand -hex 8)
-SIG=$(sign GET /ext/persons "$TS" "$NONCE" "")
-echo "[GET /ext/persons]"
-curl -s "$BASE_URL/ext/persons?limit=3" \
+SIG=$(sign GET /api/ea/persons "$TS" "$NONCE" "")
+echo "[GET /api/ea/persons]"
+curl -s "$BASE_URL/api/ea/persons?limit=3" \
     -H "X-App-Id: $APP_ID" -H "X-Timestamp: $TS" -H "X-Nonce: $NONCE" -H "X-Signature: $SIG"
 echo; echo
 
 # ── 2. POST 签名请求（JSON）───────────────────────
 TS=$(date +%s); NONCE=$(openssl rand -hex 8)
 BODY='{"hello":"world","n":42}'
-SIG=$(sign POST /ext/echo "$TS" "$NONCE" "$BODY")
-echo "[POST /ext/echo]"
-curl -s -X POST "$BASE_URL/ext/echo" \
+SIG=$(sign POST /api/ea/echo "$TS" "$NONCE" "$BODY")
+echo "[POST /api/ea/echo]"
+curl -s -X POST "$BASE_URL/api/ea/echo" \
     -H "X-App-Id: $APP_ID" -H "X-Timestamp: $TS" -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
     -H "Content-Type: application/json" -d "$BODY"
 echo

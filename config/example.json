@@ -2,7 +2,9 @@
   "app": {
     "name": "会务助手",
     "debug": true,
-    "admin_token": "xxx-替换为管理令牌-xxx"
+    "admin_token": "xxx-替换为管理令牌-xxx",
+    "internal_token": "xxx-替换为内部接口访问令牌-xxx",
+    "admin_initial_password": "xxx-首次创建admin的密码(可留空自动生成)-xxx"
   },
   "server": {
     "host": "0.0.0.0",

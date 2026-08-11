@@ -15,9 +15,14 @@ ensure_db_config
 log "[1/3] 部署后端（Docker）..."
 "$SCRIPT_DIR/deploy-backend.sh"
 
-# 2. nginx 站点配置
+# 2. nginx 站点配置（替换内部访问令牌占位符）
 log "[2/3] 配置 nginx 站点 ..."
-cp "$DEPLOY_DIR/nginx-event-assistant.conf" "$NGINX_AVAILABLE"
+INTERNAL_TOKEN="$(python3 -c "import json;print(json.load(open('$CONFIG_DIR/prod.json')).get('app',{}).get('internal_token',''))" 2>/dev/null || true)"
+if [ -z "$INTERNAL_TOKEN" ]; then
+    warn "config/prod.json 未配置 app.internal_token，使用占位符（内部接口将拒绝非本机访问）"
+    INTERNAL_TOKEN="__INTERNAL_TOKEN__"
+fi
+sed "s/__INTERNAL_TOKEN__/$INTERNAL_TOKEN/g" "$DEPLOY_DIR/nginx-event-assistant.conf" > "$NGINX_AVAILABLE"
 ln -sf "$NGINX_AVAILABLE" "$NGINX_ENABLED"
 rm -f /etc/nginx/sites-enabled/default
 "$NGINX_BIN" -t || fail "nginx 配置校验失败"

@@ -2,7 +2,7 @@
 
 本地 Web 应用，用于辅助记忆同事的面孔和姓名，并辅助会务工作（人员名单排序、部门排序存档等）。
 
-- **后端**：Python FastAPI（端口 10023）
+- **后端**：Python FastAPI（监听 127.0.0.1:10023，仅内部/经 nginx 访问）
 - **前端**：Vue 3 + Vite（端口 5173，开发时 API 代理到后端）
 - **数据库**：MySQL 8.0，库名 `event_assistant`（连接配置见下文「配置与密钥」）
 
@@ -20,8 +20,20 @@
 | 部门管理 | `/departments` | 部门分类树的维护、排序、**排序存档**（保存/恢复当前部门树顺序，供会议排序引用） |
 | 会议排序 | `/meetings` | 输入参会部门/人员名单，按职位等级 → 部门树顺序 → 组内顺序自动排序，生成排位名单 |
 
+### 登录与分权分域
+- 所有功能需登录使用（`admin` 初始密码见 `config/admin_initial_password.txt`，首次登录后请修改）
+- **admin**：全部功能（浏览、测试、会议排序 + 人员/部门/会议等所有增删改、密钥与用户管理）
+- **普通用户（游客）**：仅浏览模式、认人测试、会议排序，不能新建/删除/编辑
+- 安全设计：PBKDF2-HMAC-SHA256 密码哈希、会话存 Redis（24h）、失败 5 次锁定 15 分钟、单 IP 限流、防遍历（统一错误提示）、防 SQL 注入（参数化查询）
+- 用户管理接口：`POST/GET /api/auth/users`、`PUT/DELETE /api/auth/users/{id}`（仅管理员）
+- Redis 运行在本地 **127.0.0.1:36379**（会话/限流/签名防重放缓存）
+
+### 接口访问控制
+- **内部接口** `/api/*`：仅允许①经 nginx :80 由前端应用访问（自动携带内网标记头）②服务器内部直连（127.0.0.1）；后端只监听 127.0.0.1，外部无法直连
+- **外部接口** `/api/ea/*`：统一经 **nginx :10025** 代理访问，HMAC-SHA256 签名保护；:80 与 :10025 相互隔离（:80 拒绝 /api/ea，:10025 拒绝其他路径）
+
 ### 外部接口（签名保护）
-- 对外提供 `/ext/*` 接口（示例：`GET /ext/persons`、`POST /ext/echo`），调用需 **HMAC-SHA256 签名**（可选用 AES-256-GCM 加密请求体）
+- 对外提供 `/api/ea/*` 接口（示例：`GET /api/ea/persons`、`POST /api/ea/echo`），**统一通过 nginx :10025 端口访问**，调用需 **HMAC-SHA256 签名**（可选用 AES-256-GCM 加密请求体）；内部接口 `/api/*` 仅限前端应用或服务器内部访问
 - 签名规范见 [docs/api-signature.md](docs/api-signature.md)，客户端示例见 [examples/](examples/)
 - 密钥管理接口：`POST /api/app-keys` 创建（返回 `app_id` + `app_secret`），`PUT/DELETE /api/app-keys/{id}` 修改/删除，`POST /api/app-keys/{id}/rotate` 轮换密钥，`GET /api/app-keys/{id}/logs` 查调用日志（最近 7 天）
 - 管理接口需请求头 `X-Admin-Token`（配置 `app.admin_token` 或环境变量 `ADMIN_TOKEN`）

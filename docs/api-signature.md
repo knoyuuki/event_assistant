@@ -1,6 +1,6 @@
 # 外部接口签名与加密规范
 
-本文档定义「会务助手」对外部应用开放接口（`/ext/*`）的通用签名与加密规范。
+本文档定义「会务助手」对外部应用开放接口（`/api/ea/*`（nginx :10025））的通用签名与加密规范。
 所有外部调用必须先通过**应用密钥管理**创建密钥（见 README「外部接口」章节），
 再按本规范签名调用。
 
@@ -35,7 +35,7 @@ METHOD\nPATH\nTIMESTAMP\nNONCE\nBODY_SHA256
 ```
 
 - `METHOD`：HTTP 方法大写（`GET` / `POST` / `PUT` / `DELETE`）
-- `PATH`：请求路径（不含域名、不含 query，例如 `/ext/echo`）
+- `PATH`：请求路径（不含域名、不含 query，例如 `/api/ea/echo`）
 - `TIMESTAMP` / `NONCE`：与请求头一致
 - `BODY_SHA256`：请求体原始字节的 SHA-256（十六进制小写）；
   GET 请求或空请求体时取 `sha256("")`，即
@@ -83,9 +83,9 @@ nonce = secrets.token_hex(8)
 body = b'{"hello": "world"}'
 headers = {
     "X-App-Id": app_id, "X-Timestamp": str(ts), "X-Nonce": nonce,
-    "X-Signature": sign("POST", "/ext/echo", ts, nonce, body, app_secret),
+    "X-Signature": sign("POST", "/api/ea/echo", ts, nonce, body, app_secret),
 }
-r = requests.post(base_url + "/ext/echo", data=body, headers=headers)
+r = requests.post(base_url + "/api/ea/echo", data=body, headers=headers)
 ```
 
 ### Shell / curl（见 `examples/api_client.sh`）
@@ -94,9 +94,9 @@ r = requests.post(base_url + "/ext/echo", data=body, headers=headers)
 TS=$(date +%s); NONCE=$(openssl rand -hex 8)
 BODY='{"hello":"world"}'
 BODY_SHA=$(printf '%s' "$BODY" | sha256sum | awk '{print $1}')
-S2S=$(printf 'POST\n/ext/echo\n%s\n%s\n%s' "$TS" "$NONCE" "$BODY_SHA")
+S2S=$(printf 'POST\n/api/ea/echo\n%s\n%s\n%s' "$TS" "$NONCE" "$BODY_SHA")
 SIG=$(printf '%s' "$S2S" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
-curl -s -X POST "$BASE/ext/echo" \
+curl -s -X POST "$BASE/api/ea/echo" \
   -H "X-App-Id: $APP_ID" -H "X-Timestamp: $TS" -H "X-Nonce: $NONCE" \
   -H "X-Signature: $SIG" -H "Content-Type: application/json" -d "$BODY"
 ```

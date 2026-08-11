@@ -22,6 +22,11 @@ from api_keys import (
     LOG_RETENTION_DAYS, LOG_MAX_TEXT,
 )
 from api_auth import verify_ext_signature
+from auth import (
+    init_auth_tables, seed_admin_user, do_login, do_change_password,
+    create_session, destroy_session, get_session_user,
+    authz_allow, get_current_user, require_admin_or_token,
+)
 from models import (
     TestCheckRequest, TestResultSave,
     PersonCreate, PersonUpdate,
@@ -42,6 +47,8 @@ async def lifespan(app: FastAPI):
     """Initialize database on startup."""
     init_database()
     init_api_tables()
+    init_auth_tables()
+    seed_admin_user()
     print(f"[Startup] Database initialized.")
 
     # 定时清理任务：调用日志仅保留 7 天，每小时自动清理一次
@@ -1458,16 +1465,20 @@ _admin_token = (
     or load_config().get("app", {}).get("admin_token", "")
 )
 
+# 内部接口访问令牌：nginx :80 代理 /api/ 时携带，用于区分"经前端访问"；
+# 服务器内部直连（127.0.0.1）不受限。
+_internal_token = load_config().get("app", {}).get("internal_token", "")
+
 
 def _check_admin(authorization: str = Header(default="", alias="X-Admin-Token")) -> None:
-    """管理接口鉴权。"""
+    """管理接口鉴权（系统令牌方式，兼容保留）。"""
     if not _admin_token:
         raise HTTPException(status_code=503, detail="管理令牌未配置（请设置 app.admin_token 或 ADMIN_TOKEN）")
     if authorization != _admin_token:
         raise HTTPException(status_code=401, detail="管理令牌无效")
 
 
-ext_router = APIRouter(prefix="/ext", tags=["外部接口"])
+ext_router = APIRouter(prefix="/api/ea", tags=["外部接口"])
 admin_router = APIRouter(prefix="/api", tags=["密钥管理"])
 
 
@@ -1511,7 +1522,7 @@ async def ext_persons(request: Request, app_id: str = Depends(verify_ext_signatu
 
 
 # ── 密钥管理（管理员）─────────────────────────────
-@admin_router.post("/app-keys", dependencies=[Depends(_check_admin)])
+@admin_router.post("/app-keys", dependencies=[Depends(require_admin_or_token)])
 def api_create_app(req: AppCreateRequest):
     """创建外部应用，返回 app_id + app_secret（仅此一次展示，请妥善保存）。"""
     if not req.app_name.strip():
@@ -1519,13 +1530,13 @@ def api_create_app(req: AppCreateRequest):
     return create_app(req.app_name.strip(), req.description, req.expires_at)
 
 
-@admin_router.get("/app-keys", dependencies=[Depends(_check_admin)])
+@admin_router.get("/app-keys", dependencies=[Depends(require_admin_or_token)])
 def api_list_apps():
     """列出全部外部应用。"""
     return {"code": 0, "data": list_apps()}
 
 
-@admin_router.get("/app-keys/{app_id}", dependencies=[Depends(_check_admin)])
+@admin_router.get("/app-keys/{app_id}", dependencies=[Depends(require_admin_or_token)])
 def api_get_app(app_id: int):
     """查询单个外部应用。"""
     app = get_app_by_id(app_id)
@@ -1535,7 +1546,7 @@ def api_get_app(app_id: int):
     return {"code": 0, "data": app}
 
 
-@admin_router.put("/app-keys/{app_id}", dependencies=[Depends(_check_admin)])
+@admin_router.put("/app-keys/{app_id}", dependencies=[Depends(require_admin_or_token)])
 def api_update_app(app_id: int, req: AppUpdateRequest):
     """更新应用（名称/状态/备注）。"""
     if not update_app(app_id, req.app_name, req.status, req.description):
@@ -1543,7 +1554,7 @@ def api_update_app(app_id: int, req: AppUpdateRequest):
     return {"code": 0, "message": "更新成功"}
 
 
-@admin_router.post("/app-keys/{app_id}/rotate", dependencies=[Depends(_check_admin)])
+@admin_router.post("/app-keys/{app_id}/rotate", dependencies=[Depends(require_admin_or_token)])
 def api_rotate_app(app_id: int):
     """轮换密钥：旧密钥立即失效，返回新密钥（仅此一次展示）。"""
     secret = rotate_secret(app_id)
@@ -1552,7 +1563,7 @@ def api_rotate_app(app_id: int):
     return {"code": 0, "message": "密钥已轮换，旧密钥已失效", "app_secret": secret}
 
 
-@admin_router.delete("/app-keys/{app_id}", dependencies=[Depends(_check_admin)])
+@admin_router.delete("/app-keys/{app_id}", dependencies=[Depends(require_admin_or_token)])
 def api_delete_app(app_id: int):
     """删除应用及其全部调用日志。"""
     if not delete_app(app_id):
@@ -1560,7 +1571,7 @@ def api_delete_app(app_id: int):
     return {"code": 0, "message": "已删除"}
 
 
-@admin_router.get("/app-keys/{app_id}/logs", dependencies=[Depends(_check_admin)])
+@admin_router.get("/app-keys/{app_id}/logs", dependencies=[Depends(require_admin_or_token)])
 def api_app_logs(app_id: int, days: int = Query(LOG_RETENTION_DAYS, ge=1, le=30),
                  limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
     """查询某应用最近 N 天（默认 7 天）的调用日志。"""
@@ -1570,7 +1581,7 @@ def api_app_logs(app_id: int, days: int = Query(LOG_RETENTION_DAYS, ge=1, le=30)
     return {"code": 0, "data": result}
 
 
-@admin_router.post("/admin/logs/cleanup", dependencies=[Depends(_check_admin)])
+@admin_router.post("/admin/logs/cleanup", dependencies=[Depends(require_admin_or_token)])
 def api_cleanup_logs(days: int = Query(LOG_RETENTION_DAYS, ge=1, le=30)):
     """手动触发清理：删除超过保留期的调用日志。"""
     deleted = cleanup_expired_logs(days)
@@ -1578,7 +1589,216 @@ def api_cleanup_logs(days: int = Query(LOG_RETENTION_DAYS, ge=1, le=30)):
 
 
 app.include_router(ext_router)
+# 注意: admin_router 的 include 在其全部路由定义完成后（见下方用户管理代码之后）
+
+
+# ── 登录鉴权接口 ─────────────────────────────────────
+auth_router = APIRouter(prefix="/api/auth", tags=["登录鉴权"])
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@auth_router.post("/login")
+async def api_login(req: LoginRequest, request: Request):
+    """登录：成功返回 token 与用户信息（含角色）。"""
+    # 真实调用方 IP（nginx 已设置 X-Forwarded-For；直连时用 client.host）
+    xff = request.headers.get("X-Forwarded-For")
+    ip = (xff.split(",")[0].strip()[:45] if xff
+          else (request.client.host if (request.client and request.client.host) else "-"))
+    result = do_login(req.username, req.password, ip)
+    return {"code": 0, "message": "ok", "data": result}
+
+
+@auth_router.post("/logout")
+def api_logout(request: Request):
+    """登出：销毁当前会话。"""
+    token = _bearer_token(request)
+    destroy_session(token)
+    return {"code": 0, "message": "已退出登录"}
+
+
+@auth_router.get("/me")
+def api_me(request: Request):
+    """当前登录用户信息。"""
+    user = get_current_user(request)
+    return {"code": 0, "data": user}
+
+
+@auth_router.post("/change-password")
+def api_change_password(req: ChangePasswordRequest, request: Request):
+    """修改当前登录账号密码。"""
+    user = get_current_user(request)
+    do_change_password(user["username"], req.old_password, req.new_password)
+    destroy_session(_bearer_token(request))
+    return {"code": 0, "message": "密码已修改，请重新登录"}
+
+
+def _bearer_token(request: Request) -> str:
+    auth = request.headers.get("Authorization", "")
+    return auth[7:].strip() if auth.startswith("Bearer ") else ""
+
+
+# ── 用户管理（仅管理员）──────────────────────────────
+class UserCreateRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "user"  # admin/user
+    display_name: str | None = None
+
+
+class UserUpdateRequest(BaseModel):
+    role: str | None = None
+    display_name: str | None = None
+    status: int | None = None  # 1=启用 0=禁用
+    password: str | None = None  # 重置密码
+
+
+@admin_router.post("/auth/users", dependencies=[Depends(require_admin_or_token)])
+def api_create_user(req: UserCreateRequest):
+    """创建用户（管理员）。"""
+    from auth import hash_password
+    username = (req.username or "").strip()
+    if not username or not req.password:
+        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+    if len(req.password) < 8:
+        raise HTTPException(status_code=400, detail="密码至少 8 位")
+    if req.role not in ("admin", "user"):
+        raise HTTPException(status_code=400, detail="角色仅支持 admin/user")
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM users WHERE username = %s", (username,)
+            )
+            if cur.fetchone():
+                raise HTTPException(status_code=409, detail="用户名已存在")
+            cur.execute(
+                "INSERT INTO users (username, password_hash, role, display_name) "
+                "VALUES (%s, %s, %s, %s)",
+                (username, hash_password(req.password), req.role, req.display_name),
+            )
+        conn.commit()
+        return {"code": 0, "message": "用户已创建", "id": cur.lastrowid}
+    finally:
+        conn.close()
+
+
+@admin_router.get("/auth/users", dependencies=[Depends(require_admin_or_token)])
+def api_list_users():
+    """用户列表（管理员）。"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, username, role, display_name, status, last_login_at, created_at "
+                "FROM users ORDER BY id"
+            )
+            rows = cur.fetchall()
+            for r in rows:
+                if r.get("last_login_at"):
+                    r["last_login_at"] = r["last_login_at"].strftime("%Y-%m-%d %H:%M:%S")
+                if r.get("created_at"):
+                    r["created_at"] = r["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+            return {"code": 0, "data": rows}
+    finally:
+        conn.close()
+
+
+@admin_router.put("/auth/users/{user_id}", dependencies=[Depends(require_admin_or_token)])
+def api_update_user(user_id: int, req: UserUpdateRequest):
+    """更新用户（角色/显示名/状态/重置密码，管理员）。"""
+    from auth import hash_password
+    sets, params = [], []
+    if req.role is not None:
+        if req.role not in ("admin", "user"):
+            raise HTTPException(status_code=400, detail="角色仅支持 admin/user")
+        sets.append("role = %s"); params.append(req.role)
+    if req.display_name is not None:
+        sets.append("display_name = %s"); params.append(req.display_name)
+    if req.status is not None:
+        sets.append("status = %s"); params.append(int(req.status))
+    if req.password:
+        if len(req.password) < 8:
+            raise HTTPException(status_code=400, detail="密码至少 8 位")
+        sets.append("password_hash = %s"); params.append(hash_password(req.password))
+    if not sets:
+        raise HTTPException(status_code=400, detail="无更新内容")
+    params.append(user_id)
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE users SET {', '.join(sets)} WHERE id = %s", params
+            )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        return {"code": 0, "message": "用户已更新"}
+    finally:
+        conn.close()
+
+
+@admin_router.delete("/auth/users/{user_id}", dependencies=[Depends(require_admin_or_token)])
+def api_delete_user(user_id: int):
+    """删除用户（管理员）。"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT role FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="用户不存在")
+            if row["role"] == "admin":
+                raise HTTPException(status_code=400, detail="不能删除管理员账号")
+            cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        conn.commit()
+        return {"code": 0, "message": "用户已删除"}
+    finally:
+        conn.close()
+
+
 app.include_router(admin_router)
+app.include_router(auth_router)
+
+
+# ── 中间件 1：内部接口访问控制 ───────────────────────
+# 规则: /api/*（除 /api/ea/ 与 /api/auth/ 外）仅允许:
+#   ① 经 nginx :80 代理（携带 X-Internal-Access 内网标记头）——即前端应用访问
+#   ② 服务器内部直连（127.0.0.1 / ::1，无标记头）
+# 外部访问只能走 nginx :10025 的 /api/ea/**（签名保护）。
+@app.middleware("http")
+async def internal_access_control(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and not path.startswith("/api/ea/") \
+            and not path.startswith("/api/auth/"):
+        header_ok = _internal_token and request.headers.get("X-Internal-Access") == _internal_token
+        client = request.client.host if request.client else ""
+        local_ok = client in ("127.0.0.1", "::1")
+        if not header_ok and not local_ok:
+            return JSONResponse(status_code=403, content={"detail": "禁止外部直接访问内部接口"})
+    return await call_next(request)
+
+
+# ── 中间件 2：分权分域（RBAC）───────────────────────
+# 规则: 内部 /api/* 下所有增删改操作仅限 admin（游客白名单除外）；
+#       密钥管理接口允许 admin 会话或 X-Admin-Token。
+@app.middleware("http")
+async def rbac_middleware(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and not path.startswith("/api/ea/"):
+        try:
+            authz_allow(request.method, path, request)
+        except HTTPException as e:
+            return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+    return await call_next(request)
 
 
 def _caller_ip(request: Request) -> str:
