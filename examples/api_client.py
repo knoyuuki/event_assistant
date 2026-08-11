@@ -20,7 +20,7 @@ import time
 
 import requests
 
-BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1").rstrip("/")
+BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:10025").rstrip("/")
 APP_ID = os.environ["APP_ID"]
 APP_SECRET = os.environ["APP_SECRET"]
 
@@ -76,18 +76,18 @@ def main():
     print(f"BASE_URL = {BASE_URL}\nAPP_ID   = {APP_ID}\n")
 
     # 1. GET 签名请求（无请求体）
-    r = signed_request("GET", "/ext/persons", query={"limit": 3})
-    print(f"[GET  /ext/persons] {r.status_code}")
+    r = signed_request("GET", "/api/ea/persons", query={"limit": 3})
+    print(f"[GET  /api/ea/persons] {r.status_code}")
     print("   ", json.dumps(r.json(), ensure_ascii=False)[:200])
 
     # 2. POST 签名请求（JSON 请求体）
-    r = signed_request("POST", "/ext/echo", body={"hello": "world", "n": 42})
-    print(f"[POST /ext/echo]     {r.status_code}")
+    r = signed_request("POST", "/api/ea/echo", body={"hello": "world", "n": 42})
+    print(f"[POST /api/ea/echo]     {r.status_code}")
     print("   ", json.dumps(r.json(), ensure_ascii=False)[:200])
 
     # 3. POST + AES-256-GCM 加密请求体
-    r = signed_request("POST", "/ext/echo", body={"secret": "加密内容🔒"}, encrypt=True)
-    print(f"[POST /ext/echo]     {r.status_code} (X-Encrypt=1)")
+    r = signed_request("POST", "/api/ea/echo", body={"secret": "加密内容🔒"}, encrypt=True)
+    print(f"[POST /api/ea/echo]     {r.status_code} (X-Encrypt=1)")
     print("   ", json.dumps(r.json(), ensure_ascii=False)[:200])
 
 

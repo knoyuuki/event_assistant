@@ -21,7 +21,10 @@ SIGN_HEADERS = ("X-App-Id", "X-Timestamp", "X-Nonce", "X-Signature")
 TIMESTAMP_WINDOW = 300          # 时间戳允许偏差 ±300 秒（防重放）
 REPLAY_CACHE_TTL = TIMESTAMP_WINDOW * 2
 
-# 防重放：内存缓存 {app_id: {nonce: timestamp}}，进程重启后清空（可接受）
+# 防重放：Redis 缓存 nonce（app_id:nonce → 时间戳），进程重启不丢；
+# Redis 不可用时降级为内存缓存（可接受）
+import redis_client
+
 _replay_cache: dict[str, dict[str, float]] = {}
 _cache_last_prune = 0.0
 
@@ -74,11 +77,12 @@ def verify_signature_sync(app_id: str, timestamp: str, nonce: str, signature: st
     if abs(time.time() - ts) > TIMESTAMP_WINDOW:
         raise HTTPException(status_code=401, detail="时间戳超出允许范围（±300秒）")
 
-    # 4. nonce 防重放（同一窗口内不可重复使用）
+    # 4. nonce 防重放（同一窗口内不可重复使用；Redis 持久缓存，进程重启不失效）
     _prune_replay_cache()
-    cached = _replay_cache.setdefault(app_id, {})
-    if nonce in cached and time.time() - cached[nonce] < REPLAY_CACHE_TTL:
+    nonce_key = f"ea:nonce:{app_id}:{nonce}"
+    if not redis_client.setnx_ex(nonce_key, REPLAY_CACHE_TTL, str(int(time.time()))):
         raise HTTPException(status_code=401, detail="nonce 已被使用（重放攻击）")
+    cached = _replay_cache.setdefault(app_id, {})
     cached[nonce] = time.time()
 
     # 5. 签名校验

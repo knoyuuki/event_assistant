@@ -9,16 +9,21 @@
         <router-link to="/test" class="nav-link" active-class="nav-link--active">
           认人测试
         </router-link>
-        <router-link to="/persons" class="nav-link" active-class="nav-link--active">
+        <router-link v-if="isAdmin" to="/persons" class="nav-link" active-class="nav-link--active">
           人员管理
         </router-link>
-        <router-link to="/departments" class="nav-link" active-class="nav-link--active">
+        <router-link v-if="isAdmin" to="/departments" class="nav-link" active-class="nav-link--active">
           部门管理
         </router-link>
         <router-link to="/meetings" class="nav-link" active-class="nav-link--active">
           会议排序
         </router-link>
       </nav>
+      <div v-if="user" class="app-user">
+        <span class="user-name">{{ user.display_name || user.username }}</span>
+        <span class="user-role" :class="'role-' + user.role">{{ user.role === 'admin' ? '管理员' : '游客' }}</span>
+        <button class="logout-btn" @click="doLogout">退出</button>
+      </div>
     </header>
     <main class="app-main">
       <router-view />
@@ -27,6 +32,34 @@
 </template>
 
 <script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { fetchMe, logout, clearToken, getToken, getStoredUser, type UserInfo } from './api'
+
+const router = useRouter()
+const user = ref<UserInfo | null>(getStoredUser())
+const isAdmin = computed(() => user.value?.role === 'admin')
+
+onMounted(async () => {
+  if (!getToken()) return
+  try {
+    const res = await fetchMe()
+    user.value = res.data.data
+  } catch {
+    /* 401 由拦截器统一处理 */
+  }
+})
+
+async function doLogout() {
+  try {
+    await logout()
+  } catch {
+    /* 忽略 */
+  }
+  clearToken()
+  user.value = null
+  router.push('/login')
+}
 </script>
 
 <style>
@@ -97,5 +130,44 @@ body {
 
 .app-main {
   min-height: 400px;
+}
+</style>
+
+<style scoped>
+.app-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.user-name {
+  color: #1a1a2e;
+  font-weight: 600;
+}
+.user-role {
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+.role-admin {
+  background: #1a1a2e;
+  color: #fff;
+}
+.role-user {
+  background: #e8e8e8;
+  color: #555;
+}
+.logout-btn {
+  border: 1px solid #d9d9d9;
+  background: #fff;
+  color: #555;
+  border-radius: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.logout-btn:hover {
+  border-color: #e74c3c;
+  color: #e74c3c;
 }
 </style>
