@@ -104,15 +104,16 @@ async def verify_ext_signature(request: Request) -> str:
     nonce = request.headers["X-Nonce"]
     signature = request.headers["X-Signature"]
 
-    # 读取原始 body（starlette 会缓存，后续可重复读）
-    body = await request.body()
+    # 读取原始 body：若中间件已解密（X-Encrypt=1），用暂存的密文做签名校验
+    raw_body = getattr(request.state, "raw_body", None)
+    body = raw_body if raw_body is not None else await request.body()
     secret = await run_in_threadpool(
         verify_signature_sync, app_id, timestamp, nonce, signature,
         request.method, request.url.path, body,
     )
 
-    # 可选：AES-256-GCM 请求体解密
-    if request.headers.get("X-Encrypt") == "1":
+    # 可选：AES-256-GCM 请求体解密（中间件已处理时跳过）
+    if request.headers.get("X-Encrypt") == "1" and raw_body is None:
         if not body:
             raise HTTPException(status_code=401, detail="X-Encrypt=1 但请求体为空")
         try:
