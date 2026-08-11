@@ -516,11 +516,12 @@ def list_department_names():
         with conn.cursor() as cur:
             # Join persons with departments and categories to sort in tree order
             cur.execute("""
-                SELECT DISTINCT p.department
+                SELECT p.department
                 FROM persons p
                 LEFT JOIN departments d ON p.department = d.name
                 LEFT JOIN dept_categories c ON d.category_id = c.id
-                ORDER BY COALESCE(c.sort_order, 999), COALESCE(d.sort_order, 999), p.department
+                GROUP BY p.department
+                ORDER BY MIN(COALESCE(c.sort_order, 999)), MIN(COALESCE(d.sort_order, 999)), p.department
             """)
             return [row["department"] for row in cur.fetchall()]
     finally:

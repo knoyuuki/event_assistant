@@ -1,0 +1,10 @@
+# Docker 容器 json 日志 — 保留 7 天，超期自动删除
+/var/lib/docker/containers/*/*-json.log {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    copytruncate
+    compress
+    delaycompress
+}
