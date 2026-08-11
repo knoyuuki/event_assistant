@@ -15,6 +15,9 @@
         <router-link v-if="isAdmin" to="/departments" class="nav-link" active-class="nav-link--active">
           部门管理
         </router-link>
+        <router-link v-if="isAdmin" to="/appkeys" class="nav-link" active-class="nav-link--active">
+          密钥管理
+        </router-link>
         <router-link to="/meetings" class="nav-link" active-class="nav-link--active">
           会议排序
         </router-link>
@@ -39,6 +42,20 @@ import { fetchMe, logout, clearToken, getToken, getStoredUser, type UserInfo } f
 const router = useRouter()
 const user = ref<UserInfo | null>(getStoredUser())
 const isAdmin = computed(() => user.value?.role === 'admin')
+
+// 登录/登出后刷新用户状态（App.vue 启动时即挂载，登录发生在子路由中）
+router.afterEach(async () => {
+  if (!getToken()) {
+    user.value = null
+    return
+  }
+  try {
+    const res = await fetchMe()
+    user.value = res.data.data
+  } catch {
+    /* 401 由拦截器统一处理 */
+  }
+})
 
 onMounted(async () => {
   if (!getToken()) return

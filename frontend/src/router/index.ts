@@ -5,6 +5,7 @@ import PersonManageView from '../views/PersonManageView.vue'
 import DeptManageView from '../views/DeptManageView.vue'
 import MeetingView from '../views/MeetingView.vue'
 import LoginView from '../views/LoginView.vue'
+import AppKeysView from '../views/AppKeysView.vue'
 import { getToken, getStoredUser } from '../api'
 
 const router = createRouter({
@@ -40,6 +41,12 @@ const router = createRouter({
       path: '/departments',
       name: 'departments',
       component: DeptManageView,
+      meta: { adminOnly: true },
+    },
+    {
+      path: '/appkeys',
+      name: 'appkeys',
+      component: AppKeysView,
       meta: { adminOnly: true },
     },
     {
