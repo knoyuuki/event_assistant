@@ -7,6 +7,7 @@ import re
 import asyncio
 import time
 from contextlib import asynccontextmanager
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from fastapi import FastAPI, Query, HTTPException, Request, Depends, Header, APIRouter
@@ -1121,20 +1122,71 @@ def _load_snapshot_rank(conn, snapshot_id: int | None) -> dict | None:
     return _parse_snapshot_rank(row["data"])
 
 
+FUZZY_DEPT_THRESHOLD = 0.5
+
+
+def _fuzzy_match_department(name: str, candidates: list[str],
+                            threshold: float = FUZZY_DEPT_THRESHOLD) -> str | None:
+    """Return the candidate department most similar to `name`, or None.
+
+    Rules (kept consistent with the import module's matching):
+      - substring containment (name in candidate, or candidate in name)
+        counts as a high-confidence match (base score 0.85);
+      - otherwise use difflib sequence similarity (SequenceMatcher.ratio).
+    Ties are broken by higher sequence ratio, then by shorter name.
+    """
+    if not name or not candidates:
+        return None
+    scored: list[tuple] = []
+    for dept in candidates:
+        ratio = SequenceMatcher(None, name, dept).ratio()
+        if name in dept or dept in name:
+            score = max(0.85, ratio)
+        else:
+            score = ratio
+        if score >= threshold:
+            scored.append((score, ratio, -len(dept), dept))
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    return scored[0][3]
+
+
 def _sort_departments(conn, dept_names: list[str], snapshot_rank: dict | None = None) -> list[str]:
     """Sort department names by (category order, department order).
     Uses a saved snapshot's ranking when provided, otherwise the current tree order.
-    Unknown names are appended at the end preserving their original relative order.
+
+    Each input name is first fuzzy-matched against the known departments and
+    resolved to the best match (e.g. 「企发部」→「企发部/数智办」); the resolved
+    canonical names are used for ranking. Names that match nothing are kept as-is
+    and appended at the end preserving their original relative order.
     """
     if not dept_names:
         return []
     rank = _dept_rank_map(conn, snapshot_rank)
+    candidates = list(rank.keys())
+
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for raw in dept_names:
+        name = raw.strip()
+        if not name:
+            continue
+        if name in rank:
+            canonical = name
+        else:
+            canonical = _fuzzy_match_department(name, candidates) or name
+        # Deduplicate: several inputs may resolve to the same department.
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        resolved.append(canonical)
 
     def key(name: str):
         return rank.get(name, (999999, 999999))
 
     # Stable sort: unknown names keep input order and land at the end.
-    return sorted(dept_names, key=key)
+    return sorted(resolved, key=key)
 
 
 def _sort_persons(conn, person_names: list[str], snapshot_rank: dict | None = None) -> list[dict]:
