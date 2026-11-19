@@ -226,7 +226,7 @@
           </div>
           <div class="form-group">
             <label class="form-label">分管部门</label>
-            <input v-model="form.managed_departments" class="form-input" placeholder="多个用逗号分隔，如：****,人力资源部" />
+            <input v-model="form.managed_departments" class="form-input" placeholder="多个用逗号分隔，如：****,****" />
           </div>
           <div class="form-group">
             <label class="form-label">分管业务</label>

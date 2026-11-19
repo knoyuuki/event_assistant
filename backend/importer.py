@@ -447,7 +447,7 @@ def import_company_leaders_from_markdown():
         if re.match(r'^\d+\.', line):
             continue
 
-        # Department line with people: "* 公司领导：****（2.0）..." or "* ****：****3.0..."
+        # Department line with people: "* ****：****（2.0）..." or "* ****：****3.0..."
         if line.startswith('*'):
             line = line[1:].strip()
 

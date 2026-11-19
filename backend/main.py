@@ -1157,7 +1157,7 @@ def _sort_departments(conn, dept_names: list[str], snapshot_rank: dict | None = 
     Uses a saved snapshot's ranking when provided, otherwise the current tree order.
 
     Each input name is first fuzzy-matched against the known departments and
-    resolved to the best match (e.g. 「****」→「****/****」); the resolved
+    resolved to the best match (e.g. 「****」→「****」); the resolved
     canonical names are used for ranking. Names that match nothing are kept as-is
     and appended at the end preserving their original relative order.
     """

@@ -38,7 +38,7 @@ def parse_markdown_tree(filepath: str) -> list[dict]:
         * 部门名称：...
 
     Returns:
-        [{"name": "公司领导", "departments": ["公司领导", "资深总裁", ...]}, ...]
+        [{"name": "****", "departments": ["****", "****", ...]}, ...]
     """
     if not os.path.exists(filepath):
         print(f"[ERROR] Markdown file not found: {filepath}")
@@ -62,7 +62,7 @@ def parse_markdown_tree(filepath: str) -> list[dict]:
             tree.append(current_category)
             continue
 
-        # Match department line: "* ****：...", "* 资深总裁", etc.
+        # Match department line: "* ****：...", "* ****", etc.
         dept_match = re.match(r"^\*\s*(.+)$", line)
         if dept_match and current_category is not None:
             raw = dept_match.group(1).strip()
